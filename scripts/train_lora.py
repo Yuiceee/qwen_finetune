@@ -6,6 +6,7 @@ LoRA微调训练脚本
 import json
 import torch
 import time
+import os
 from pathlib import Path
 from transformers import (
     AutoModelForCausalLM,
@@ -18,6 +19,12 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import Dataset
 import argparse
 import trackio
+
+# 设置HuggingFace缓存目录
+if 'HF_HOME' not in os.environ:
+    os.environ['HF_HOME'] = '/macroverse/public/database/huggingface'
+if 'TRANSFORMERS_CACHE' not in os.environ:
+    os.environ['TRANSFORMERS_CACHE'] = '/macroverse/public/database/huggingface'
 
 
 def load_jsonl_dataset(file_path):
@@ -67,9 +74,11 @@ def main(args):
     print("LoRA微调训练开始")
     print("=" * 50)
 
-    # 初始化Trackio实验跟踪
+    # 初始化Trackio实验跟踪（只在本地使用，不上传到Space）
     trackio.init(
         project="email-lora-finetuning",
+        space_id="Yurice/email-lora-finetuning",
+        # 不设置 space_id，只在本地使用，不需要登录
         config={
             "model_name": args.model_name,
             "lora_r": args.lora_r,
@@ -176,7 +185,7 @@ def main(args):
         save_total_limit=3,
         fp16=False,
         bf16=True,
-        report_to="trackio",  # 使用Trackio替代TensorBoard
+        report_to="trackio",  # 使用Trackio
         logging_dir=f"{args.output_dir}/logs",
         load_best_model_at_end=True if eval_dataset else False,
         metric_for_best_model="eval_loss" if eval_dataset else None,
