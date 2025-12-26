@@ -5,9 +5,16 @@
 import torch
 import time
 import json
+import os
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 import argparse
+
+# 设置HuggingFace缓存目录
+if 'HF_HOME' not in os.environ:
+    os.environ['HF_HOME'] = '/macroverse/public/database/huggingface'
+if 'TRANSFORMERS_CACHE' not in os.environ:
+    os.environ['TRANSFORMERS_CACHE'] = '/macroverse/public/database/huggingface'
 
 
 def load_model(base_model_name, lora_model_path=None):

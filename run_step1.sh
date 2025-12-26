@@ -4,9 +4,17 @@
 
 set -e  # 遇到错误立即退出
 
+# 设置HuggingFace缓存目录（使用已下载的模型）
+export HF_HOME=/macroverse/public/database/huggingface/hub
+export HF_DATASETS_CACHE=/macroverse/public/database/huggingface/datasets
+
 echo "======================================================"
 echo "第一步：LoRA微调完整流程"
 echo "======================================================"
+echo ""
+echo "环境变量设置："
+echo "  HF_HOME=$HF_HOME"
+echo ""
 
 # 检查数据是否存在
 echo ""

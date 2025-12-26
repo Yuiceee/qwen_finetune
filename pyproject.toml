@@ -18,4 +18,5 @@ dependencies = [
     "trackio>=0.1.0",
     "tqdm>=4.67.0",
     "transformers>=4.57.3",
+    "httpx[socks]>=0.28.1",
 ]
