@@ -12,9 +12,9 @@ import argparse
 
 # 设置HuggingFace缓存目录
 if 'HF_HOME' not in os.environ:
-    os.environ['HF_HOME'] = '/macroverse/public/database/huggingface'
+    os.environ['HF_HOME'] = '/macroverse/public/database/huggingface/hub'
 if 'TRANSFORMERS_CACHE' not in os.environ:
-    os.environ['TRANSFORMERS_CACHE'] = '/macroverse/public/database/huggingface'
+    os.environ['TRANSFORMERS_CACHE'] = '/macroverse/public/database/huggingface/hub'
 
 
 def load_model(base_model_name, lora_model_path=None):

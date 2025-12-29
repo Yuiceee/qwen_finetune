@@ -15,8 +15,9 @@ dependencies = [
     "sentencepiece>=0.2.1",
     "tensorboard>=2.20.0",
     "torch>=2.9.1",
-    "trackio>=0.1.0",
     "tqdm>=4.67.0",
     "transformers>=4.57.3",
     "httpx[socks]>=0.28.1",
+    "ipykernel>=7.1.0",
+    "swanlab>=0.7.5",
 ]
