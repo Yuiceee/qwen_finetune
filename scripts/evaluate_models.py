@@ -99,78 +99,106 @@ def extract_json_from_text(text):
     return None
 
 
-def calculate_field_metrics(predicted_json, expected_json):
+def normalize_string(s):
+    """标准化字符串：去空格、转小写、处理None"""
+    if s is None or s == 'None':
+        return ''
+    return str(s).strip().lower()
+
+
+def normalize_list(lst):
+    """标准化列表：处理string/list类型，保持原始顺序"""
+    if isinstance(lst, str):
+        # 处理逗号分隔的字符串
+        lst = [item.strip() for item in lst.split(',')]
+    elif not isinstance(lst, list):
+        return []
+
+    # 标准化每个元素并保持原始顺序
+    return [normalize_string(item) for item in lst if item]
+
+
+def calculate_core_field_metrics(predicted_json, expected_json):
     """
-    计算字段级别的指标
-    返回：字段完整性、字段准确性等
+    计算核心字段级别的精确匹配指标
+    返回每个字段的匹配情况和总体准确率
     """
-    if predicted_json is None or expected_json is None:
-        return {
-            'field_completeness': 0.0,
-            'field_accuracy': 0.0,
-            'has_all_fields': False,
-            'exact_match': False
-        }
-
-    # 定义可能的关键字段（中英文）
-    key_fields = ['title', 'time', 'location', 'participants',
-                  '标题', '时间', '地点', '参与者', 'date', '日期']
-
-    # 统计期望输出中存在的关键字段
-    expected_fields = set()
-    for field in key_fields:
-        if field in expected_json:
-            expected_fields.add(field)
-
-    # 统计预测输出中存在的关键字段
-    predicted_fields = set()
-    for field in key_fields:
-        if field in predicted_json:
-            predicted_fields.add(field)
-
-    # 计算字段完整性（预测输出包含了多少期望字段）
-    if len(expected_fields) > 0:
-        field_completeness = len(predicted_fields & expected_fields) / len(expected_fields) * 100
-    else:
-        field_completeness = 0.0
-
-    # 计算字段准确性（匹配字段的值是否相同）
-    matching_fields = 0
-    common_fields = predicted_fields & expected_fields
-    for field in common_fields:
-        # 简单的字符串相似度比较（可以改进为更复杂的比较）
-        if str(predicted_json[field]).strip() == str(expected_json[field]).strip():
-            matching_fields += 1
-
-    field_accuracy = (matching_fields / len(expected_fields) * 100) if len(expected_fields) > 0 else 0.0
-
-    # 检查是否包含所有字段
-    has_all_fields = len(predicted_fields & expected_fields) == len(expected_fields)
-
-    # 检查是否完全匹配
-    exact_match = (predicted_json == expected_json)
-
-    return {
-        'field_completeness': field_completeness,
-        'field_accuracy': field_accuracy,
-        'has_all_fields': has_all_fields,
-        'exact_match': exact_match,
-        'expected_field_count': len(expected_fields),
-        'predicted_field_count': len(predicted_fields),
-        'matching_field_count': matching_fields
+    metrics = {
+        'event_type_match': False,
+        'title_match': False,
+        'time_match': False,
+        'location_match': False,
+        'participants_match': False,
+        'organizer_match': False,
+        'field_accuracy': 0.0,  # 6个字段的平均准确率
+        'all_fields_correct': False
     }
+
+    if predicted_json is None or expected_json is None:
+        return metrics
+
+    match_count = 0
+    total_fields = 6
+
+    # 1. event_type - 精确匹配（不区分大小写）
+    if normalize_string(predicted_json.get('event_type')) == normalize_string(expected_json.get('event_type')):
+        metrics['event_type_match'] = True
+        match_count += 1
+
+    # 2. title - 精确匹配（去除首尾空格）
+    if normalize_string(predicted_json.get('title')) == normalize_string(expected_json.get('title')):
+        metrics['title_match'] = True
+        match_count += 1
+
+    # 3. time - 字符串精确匹配
+    if normalize_string(str(predicted_json.get('time', ''))) == normalize_string(str(expected_json.get('time', ''))):
+        metrics['time_match'] = True
+        match_count += 1
+
+    # 4. location - 精确匹配（处理null情况）
+    pred_loc = normalize_string(str(predicted_json.get('location', 'null')))
+    exp_loc = normalize_string(str(expected_json.get('location', 'null')))
+    if pred_loc == exp_loc:
+        metrics['location_match'] = True
+        match_count += 1
+
+    # 5. participants - 完全匹配（顺序+内容）
+    pred_parts = normalize_list(predicted_json.get('participants', []))
+    exp_parts = normalize_list(expected_json.get('participants', []))
+    if pred_parts == exp_parts:
+        metrics['participants_match'] = True
+        match_count += 1
+
+    # 6. organizer - 精确匹配
+    if normalize_string(predicted_json.get('organizer')) == normalize_string(expected_json.get('organizer')):
+        metrics['organizer_match'] = True
+        match_count += 1
+
+    metrics['field_accuracy'] = (match_count / total_fields) * 100
+    metrics['all_fields_correct'] = (match_count == total_fields)
+
+    return metrics
 
 
 def evaluate_model(model, tokenizer, test_data, max_samples=None):
-    """评估模型性能"""
+    """评估模型性能 - 使用新的核心字段指标"""
     results = []
 
     # 统计指标
     valid_json_count = 0
-    field_completeness_sum = 0.0
+
+    # 按字段统计
+    field_stats = {
+        'event_type_correct': 0,
+        'title_correct': 0,
+        'time_correct': 0,
+        'location_correct': 0,
+        'participants_correct': 0,
+        'organizer_correct': 0,
+        'all_fields_correct': 0
+    }
+
     field_accuracy_sum = 0.0
-    exact_match_count = 0
-    has_all_fields_count = 0
 
     samples = test_data[:max_samples] if max_samples else test_data
 
@@ -196,16 +224,26 @@ def evaluate_model(model, tokenizer, test_data, max_samples=None):
         if is_valid_json:
             valid_json_count += 1
 
-        # 计算字段级指标
-        field_metrics = calculate_field_metrics(predicted_json, expected_json)
+        # 计算核心字段指标
+        field_metrics = calculate_core_field_metrics(predicted_json, expected_json)
 
-        field_completeness_sum += field_metrics['field_completeness']
+        # 累加统计
         field_accuracy_sum += field_metrics['field_accuracy']
 
-        if field_metrics['exact_match']:
-            exact_match_count += 1
-        if field_metrics['has_all_fields']:
-            has_all_fields_count += 1
+        if field_metrics['event_type_match']:
+            field_stats['event_type_correct'] += 1
+        if field_metrics['title_match']:
+            field_stats['title_correct'] += 1
+        if field_metrics['time_match']:
+            field_stats['time_correct'] += 1
+        if field_metrics['location_match']:
+            field_stats['location_correct'] += 1
+        if field_metrics['participants_match']:
+            field_stats['participants_correct'] += 1
+        if field_metrics['organizer_match']:
+            field_stats['organizer_correct'] += 1
+        if field_metrics['all_fields_correct']:
+            field_stats['all_fields_correct'] += 1
 
         results.append({
             'input': email_content,
@@ -221,14 +259,21 @@ def evaluate_model(model, tokenizer, test_data, max_samples=None):
     total_samples = len(samples)
     metrics = {
         'json_format_accuracy': (valid_json_count / total_samples * 100) if total_samples > 0 else 0,
-        'field_completeness': (field_completeness_sum / total_samples) if total_samples > 0 else 0,
-        'field_accuracy': (field_accuracy_sum / total_samples) if total_samples > 0 else 0,
-        'exact_match_rate': (exact_match_count / total_samples * 100) if total_samples > 0 else 0,
-        'all_fields_present_rate': (has_all_fields_count / total_samples * 100) if total_samples > 0 else 0,
+        'average_field_accuracy': (field_accuracy_sum / total_samples) if total_samples > 0 else 0,
+        'perfect_extraction_rate': (field_stats['all_fields_correct'] / total_samples * 100) if total_samples > 0 else 0,
+
+        # 每个字段的准确率
+        'event_type_accuracy': (field_stats['event_type_correct'] / total_samples * 100) if total_samples > 0 else 0,
+        'title_accuracy': (field_stats['title_correct'] / total_samples * 100) if total_samples > 0 else 0,
+        'time_accuracy': (field_stats['time_correct'] / total_samples * 100) if total_samples > 0 else 0,
+        'location_accuracy': (field_stats['location_correct'] / total_samples * 100) if total_samples > 0 else 0,
+        'participants_accuracy': (field_stats['participants_correct'] / total_samples * 100) if total_samples > 0 else 0,
+        'organizer_accuracy': (field_stats['organizer_correct'] / total_samples * 100) if total_samples > 0 else 0,
+
+        # 原始计数
         'total_samples': total_samples,
         'valid_json_count': valid_json_count,
-        'exact_match_count': exact_match_count,
-        'all_fields_present_count': has_all_fields_count
+        'perfect_extraction_count': field_stats['all_fields_correct']
     }
 
     return results, metrics
@@ -259,10 +304,15 @@ def main(args):
 
     print(f"\n基础模型评估结果:")
     print(f"  JSON格式正确率: {base_metrics['json_format_accuracy']:.2f}%")
-    print(f"  字段完整性: {base_metrics['field_completeness']:.2f}%")
-    print(f"  字段准确性: {base_metrics['field_accuracy']:.2f}%")
-    print(f"  完全匹配率: {base_metrics['exact_match_rate']:.2f}%")
-    print(f"  所有字段存在率: {base_metrics['all_fields_present_rate']:.2f}%")
+    print(f"  平均字段准确率: {base_metrics['average_field_accuracy']:.2f}%")
+    print(f"  完美提取率: {base_metrics['perfect_extraction_rate']:.2f}%")
+    print(f"\n  分字段准确率:")
+    print(f"    - 事件类型: {base_metrics['event_type_accuracy']:.2f}%")
+    print(f"    - 标题: {base_metrics['title_accuracy']:.2f}%")
+    print(f"    - 时间: {base_metrics['time_accuracy']:.2f}%")
+    print(f"    - 地点: {base_metrics['location_accuracy']:.2f}%")
+    print(f"    - 参与者: {base_metrics['participants_accuracy']:.2f}%")
+    print(f"    - 组织者: {base_metrics['organizer_accuracy']:.2f}%")
 
     # 释放基础模型内存
     del base_model, base_tokenizer
@@ -277,22 +327,32 @@ def main(args):
 
     print(f"\n微调模型评估结果:")
     print(f"  JSON格式正确率: {ft_metrics['json_format_accuracy']:.2f}%")
-    print(f"  字段完整性: {ft_metrics['field_completeness']:.2f}%")
-    print(f"  字段准确性: {ft_metrics['field_accuracy']:.2f}%")
-    print(f"  完全匹配率: {ft_metrics['exact_match_rate']:.2f}%")
-    print(f"  所有字段存在率: {ft_metrics['all_fields_present_rate']:.2f}%")
+    print(f"  平均字段准确率: {ft_metrics['average_field_accuracy']:.2f}%")
+    print(f"  完美提取率: {ft_metrics['perfect_extraction_rate']:.2f}%")
+    print(f"\n  分字段准确率:")
+    print(f"    - 事件类型: {ft_metrics['event_type_accuracy']:.2f}%")
+    print(f"    - 标题: {ft_metrics['title_accuracy']:.2f}%")
+    print(f"    - 时间: {ft_metrics['time_accuracy']:.2f}%")
+    print(f"    - 地点: {ft_metrics['location_accuracy']:.2f}%")
+    print(f"    - 参与者: {ft_metrics['participants_accuracy']:.2f}%")
+    print(f"    - 组织者: {ft_metrics['organizer_accuracy']:.2f}%")
 
     # 对比结果
     print("\n" + "=" * 60)
     print("评估结果对比")
     print("=" * 60)
-    print(f"{'指标':<25} {'基础模型':<15} {'微调模型':<15} {'提升':<10}")
-    print("-" * 60)
-    print(f"{'JSON格式正确率':<25} {base_metrics['json_format_accuracy']:>10.2f}%  {ft_metrics['json_format_accuracy']:>10.2f}%  {ft_metrics['json_format_accuracy']-base_metrics['json_format_accuracy']:>+8.2f}%")
-    print(f"{'字段完整性':<25} {base_metrics['field_completeness']:>10.2f}%  {ft_metrics['field_completeness']:>10.2f}%  {ft_metrics['field_completeness']-base_metrics['field_completeness']:>+8.2f}%")
-    print(f"{'字段准确性':<25} {base_metrics['field_accuracy']:>10.2f}%  {ft_metrics['field_accuracy']:>10.2f}%  {ft_metrics['field_accuracy']-base_metrics['field_accuracy']:>+8.2f}%")
-    print(f"{'完全匹配率':<25} {base_metrics['exact_match_rate']:>10.2f}%  {ft_metrics['exact_match_rate']:>10.2f}%  {ft_metrics['exact_match_rate']-base_metrics['exact_match_rate']:>+8.2f}%")
-    print(f"{'所有字段存在率':<25} {base_metrics['all_fields_present_rate']:>10.2f}%  {ft_metrics['all_fields_present_rate']:>10.2f}%  {ft_metrics['all_fields_present_rate']-base_metrics['all_fields_present_rate']:>+8.2f}%")
+    print(f"{'指标':<30} {'基础模型':<15} {'微调模型':<15} {'提升':<10}")
+    print("-" * 70)
+    print(f"{'JSON格式正确率':<30} {base_metrics['json_format_accuracy']:>10.2f}%  {ft_metrics['json_format_accuracy']:>10.2f}%  {ft_metrics['json_format_accuracy']-base_metrics['json_format_accuracy']:>+8.2f}%")
+    print(f"{'平均字段准确率':<30} {base_metrics['average_field_accuracy']:>10.2f}%  {ft_metrics['average_field_accuracy']:>10.2f}%  {ft_metrics['average_field_accuracy']-base_metrics['average_field_accuracy']:>+8.2f}%")
+    print(f"{'完美提取率（6字段全对）':<30} {base_metrics['perfect_extraction_rate']:>10.2f}%  {ft_metrics['perfect_extraction_rate']:>10.2f}%  {ft_metrics['perfect_extraction_rate']-base_metrics['perfect_extraction_rate']:>+8.2f}%")
+    print("-" * 70)
+    print(f"{'事件类型准确率':<30} {base_metrics['event_type_accuracy']:>10.2f}%  {ft_metrics['event_type_accuracy']:>10.2f}%  {ft_metrics['event_type_accuracy']-base_metrics['event_type_accuracy']:>+8.2f}%")
+    print(f"{'标题准确率':<30} {base_metrics['title_accuracy']:>10.2f}%  {ft_metrics['title_accuracy']:>10.2f}%  {ft_metrics['title_accuracy']-base_metrics['title_accuracy']:>+8.2f}%")
+    print(f"{'时间准确率':<30} {base_metrics['time_accuracy']:>10.2f}%  {ft_metrics['time_accuracy']:>10.2f}%  {ft_metrics['time_accuracy']-base_metrics['time_accuracy']:>+8.2f}%")
+    print(f"{'地点准确率':<30} {base_metrics['location_accuracy']:>10.2f}%  {ft_metrics['location_accuracy']:>10.2f}%  {ft_metrics['location_accuracy']-base_metrics['location_accuracy']:>+8.2f}%")
+    print(f"{'参与者准确率':<30} {base_metrics['participants_accuracy']:>10.2f}%  {ft_metrics['participants_accuracy']:>10.2f}%  {ft_metrics['participants_accuracy']-base_metrics['participants_accuracy']:>+8.2f}%")
+    print(f"{'组织者准确率':<30} {base_metrics['organizer_accuracy']:>10.2f}%  {ft_metrics['organizer_accuracy']:>10.2f}%  {ft_metrics['organizer_accuracy']-base_metrics['organizer_accuracy']:>+8.2f}%")
 
     # 保存详细结果
     if args.output_file:
@@ -302,10 +362,14 @@ def main(args):
             'finetuned_metrics': ft_metrics,
             'improvements': {
                 'json_format_accuracy': ft_metrics['json_format_accuracy'] - base_metrics['json_format_accuracy'],
-                'field_completeness': ft_metrics['field_completeness'] - base_metrics['field_completeness'],
-                'field_accuracy': ft_metrics['field_accuracy'] - base_metrics['field_accuracy'],
-                'exact_match_rate': ft_metrics['exact_match_rate'] - base_metrics['exact_match_rate'],
-                'all_fields_present_rate': ft_metrics['all_fields_present_rate'] - base_metrics['all_fields_present_rate']
+                'average_field_accuracy': ft_metrics['average_field_accuracy'] - base_metrics['average_field_accuracy'],
+                'perfect_extraction_rate': ft_metrics['perfect_extraction_rate'] - base_metrics['perfect_extraction_rate'],
+                'event_type_accuracy': ft_metrics['event_type_accuracy'] - base_metrics['event_type_accuracy'],
+                'title_accuracy': ft_metrics['title_accuracy'] - base_metrics['title_accuracy'],
+                'time_accuracy': ft_metrics['time_accuracy'] - base_metrics['time_accuracy'],
+                'location_accuracy': ft_metrics['location_accuracy'] - base_metrics['location_accuracy'],
+                'participants_accuracy': ft_metrics['participants_accuracy'] - base_metrics['participants_accuracy'],
+                'organizer_accuracy': ft_metrics['organizer_accuracy'] - base_metrics['organizer_accuracy']
             },
             'samples': []
         }
@@ -317,12 +381,12 @@ def main(args):
                 'expected': base_res['expected'],
                 'base_prediction': base_res['prediction'],
                 'base_valid_json': base_res['valid_json'],
-                'base_field_completeness': base_res['field_completeness'],
                 'base_field_accuracy': base_res['field_accuracy'],
+                'base_all_fields_correct': base_res['all_fields_correct'],
                 'ft_prediction': ft_res['prediction'],
                 'ft_valid_json': ft_res['valid_json'],
-                'ft_field_completeness': ft_res['field_completeness'],
-                'ft_field_accuracy': ft_res['field_accuracy']
+                'ft_field_accuracy': ft_res['field_accuracy'],
+                'ft_all_fields_correct': ft_res['all_fields_correct']
             })
 
         with open(args.output_file, 'w', encoding='utf-8') as f:
@@ -342,8 +406,8 @@ if __name__ == "__main__":
                         help="微调后的LoRA模型路径")
     parser.add_argument("--test_file", type=str, default="data/processed/test.jsonl",
                         help="测试数据文件路径")
-    parser.add_argument("--max_samples", type=int, default=50,
-                        help="最大测试样本数（None表示使用全部）")
+    parser.add_argument("--max_samples", type=int, default=None,
+                        help="最大测试样本数（默认None表示使用全部）")
     parser.add_argument("--output_file", type=str, default="evaluation_results.json",
                         help="结果输出文件路径")
 

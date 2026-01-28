@@ -20,4 +20,5 @@ dependencies = [
     "httpx[socks]>=0.28.1",
     "ipykernel>=7.1.0",
     "swanlab>=0.7.5",
+    "python-dateutil>=2.9.0.post0",
 ]

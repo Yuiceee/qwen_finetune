@@ -27,9 +27,6 @@ import numpy as np
 # 设置HuggingFace缓存目录
 if 'HF_HOME' not in os.environ:
     os.environ['HF_HOME'] = '/macroverse/public/database/huggingface/hub/'
-if 'TRANSFORMERS_CACHE' not in os.environ:
-    os.environ['TRANSFORMERS_CACHE'] = '/macroverse/public/database/huggingface/hub'
-
 
 def load_jsonl_dataset(file_path):
     """加载JSONL格式的数据集，并转换为messages格式"""
@@ -92,7 +89,6 @@ class SwanLabCallback(TrainerCallback):
         self.start_time = None
         self.best_eval_loss = float('inf')
         self.best_eval_perplexity = float('inf')
-        self.last_train_loss = None
 
     def on_train_begin(self, args, state, control, model=None, **kwargs):
         """训练开始时记录模型参数信息"""
@@ -107,9 +103,20 @@ class SwanLabCallback(TrainerCallback):
             })
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        """每次日志记录时保存训练loss"""
-        if logs and "loss" in logs:
-            self.last_train_loss = logs["loss"]
+        """每次日志记录时记录训练指标到SwanLab"""
+        if logs:
+            # 记录训练指标到SwanLab
+            log_dict = {}
+            if "loss" in logs:
+                log_dict["train_loss"] = logs["loss"]
+            if "learning_rate" in logs:
+                log_dict["learning_rate"] = logs["learning_rate"]
+            if "epoch" in logs:
+                log_dict["epoch"] = logs["epoch"]
+
+            # 只有当有指标时才记录
+            if log_dict:
+                swanlab.log(log_dict)
 
     def on_train_end(self, args, state, control, **kwargs):
         """训练结束时记录总时间"""
@@ -131,33 +138,16 @@ class SwanLabCallback(TrainerCallback):
             perplexity = np.exp(eval_loss)
             metrics["eval_perplexity"] = float(perplexity)
 
-            # 2. 跟踪最佳指标
+            # 2. 跟踪最佳指标（用于early stopping和模型保存）
             if eval_loss < self.best_eval_loss:
                 self.best_eval_loss = eval_loss
                 self.best_eval_perplexity = perplexity
-                metrics["is_best_eval"] = True
-            else:
-                metrics["is_best_eval"] = False
 
-            # 3. 计算过拟合指标（如果有最近的训练loss）
-            log_metrics = {
-                "eval_perplexity": float(perplexity),
-                "best_eval_loss": self.best_eval_loss,
-                "best_eval_perplexity": self.best_eval_perplexity
-            }
-
-            if self.last_train_loss is not None:
-                overfitting_gap = eval_loss - self.last_train_loss
-                overfitting_ratio = eval_loss / self.last_train_loss if self.last_train_loss > 0 else 1.0
-
-                metrics["overfitting_gap"] = float(overfitting_gap)
-                metrics["overfitting_ratio"] = float(overfitting_ratio)
-
-                log_metrics["overfitting_gap"] = float(overfitting_gap)
-                log_metrics["overfitting_ratio"] = float(overfitting_ratio)
-
-            # 记录所有指标到swanlab
-            swanlab.log(log_metrics)
+            # 3. 记录指标到SwanLab
+            swanlab.log({
+                "eval_loss": float(eval_loss),
+                "eval_perplexity": float(perplexity)
+            })
 
 
 def main(args):
@@ -171,16 +161,20 @@ def main(args):
 
     # 初始化 SwanLab
     swanlab.init(
-        project="email-lora-finetuning",
+        project="email-lora-finetuning-v2",
         experiment_name=run_name,
         config={
             "model_name": args.model_name,
             "lora_r": args.lora_r,
             "lora_alpha": args.lora_alpha,
             "learning_rate": args.learning_rate,
+            "warmup_ratio": args.warmup_ratio,
             "num_epochs": args.num_epochs,
             "batch_size": args.batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "early_stopping": args.early_stopping,
+            "early_stopping_patience": args.early_stopping_patience,
+            "data_version": "standardized",  # 标记使用清理后的数据
         }
     )
 
@@ -260,7 +254,7 @@ def main(args):
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         weight_decay=0.01,
-        warmup_steps=100,
+        warmup_ratio=args.warmup_ratio,  # 使用warmup_ratio代替warmup_steps，更灵活
         logging_steps=10,
         save_steps=100,
         eval_strategy="steps" if eval_dataset else "no",
@@ -337,9 +331,9 @@ if __name__ == "__main__":
                         help="基础模型名称")
 
     # 数据参数
-    parser.add_argument("--train_data", type=str, default="data/processed/train.jsonl",
+    parser.add_argument("--train_data", type=str, default="data/standardized/train.jsonl",
                         help="训练数据路径")
-    parser.add_argument("--eval_data", type=str, default="data/processed/test.jsonl",
+    parser.add_argument("--eval_data", type=str, default="data/standardized/valid.jsonl",
                         help="评估数据路径")
 
     # LoRA参数
@@ -349,21 +343,23 @@ if __name__ == "__main__":
                         help="LoRA alpha参数")
 
     # 训练参数
-    parser.add_argument("--output_dir", type=str, default="outputs/lora_model",
+    parser.add_argument("--output_dir", type=str, default="outputs/lora_model_v2",
                         help="输出目录")
-    parser.add_argument("--num_epochs", type=int, default=3,
+    parser.add_argument("--num_epochs", type=int, default=5,
                         help="训练轮数")
     parser.add_argument("--batch_size", type=int, default=1,
                         help="批次大小")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8,
                         help="梯度累积步数")
-    parser.add_argument("--learning_rate", type=float, default=2e-4,
-                        help="学习率")
+    parser.add_argument("--learning_rate", type=float, default=1e-4,
+                        help="学习率（推荐1e-4，更稳定）")
+    parser.add_argument("--warmup_ratio", type=float, default=0.1,
+                        help="warmup比例（训练步数的前10%用于warmup）")
 
     # 早停参数
-    parser.add_argument("--early_stopping", action="store_true",
-                        help="启用早停机制")
-    parser.add_argument("--early_stopping_patience", type=int, default=3,
+    parser.add_argument("--early_stopping", action="store_true", default=True,
+                        help="启用早停机制（默认开启）")
+    parser.add_argument("--early_stopping_patience", type=int, default=5,
                         help="早停耐心值：在多少个评估步骤后如果指标没有改善则停止训练")
     parser.add_argument("--early_stopping_threshold", type=float, default=0.0,
                         help="早停阈值：指标改善的最小变化量")
